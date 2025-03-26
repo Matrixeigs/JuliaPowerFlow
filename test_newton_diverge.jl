@@ -1,4 +1,5 @@
 using LinearAlgebra, SparseArrays, Printf
+using Plots
 # f(x) = tan(x) - x
 
 x0 = zeros(1)
@@ -16,7 +17,7 @@ function create_residual(x)
     return r
 end
 
-function newton_raphson(x0, tol=1e-6, max_iter=1000)
+function newton_raphson(x0, tol=1e-6, max_iter=100)
     x = x0
     for i in 1:max_iter
         @show i
@@ -35,3 +36,8 @@ function newton_raphson(x0, tol=1e-6, max_iter=1000)
 end
 
 newton_raphson(x0)
+
+# Plot the function
+x = range(-10, 10, length=1000)
+y = tan.(x) - x
+plot(x, y, label="f(x) = tan(x) - x", xlabel="x", ylabel="f(x)", title="f(x) = tan(x) - x", lw=2)
