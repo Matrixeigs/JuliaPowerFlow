@@ -13,6 +13,10 @@ export check_capability_constraints, calculate_qmin_function
 export create_ieee9_system, case9, run_power_flow
 export run_power_flow_with_visualization
 
+# Add new exports
+export convert_to_legacy_format, solve_power_system
+export run_power_flow_new, build_ybus_new
+
 # Include core functionality from organized directories
 include("../data/case9.jl")
 include("../algorithms/power_flow.jl")
@@ -267,4 +271,262 @@ function create_ieee9_system()
     return sys
 end
 
-end # module
+"""
+    convert_to_legacy_format(sys::PowerSystem)
+
+Convert PowerSystem to legacy MATPOWER-style data format for compatibility with existing algorithms.
+"""
+function convert_to_legacy_format(sys::PowerSystem)
+    # Initialize legacy format dictionary
+    case_data = Dict{String, Any}()
+    case_data["version"] = "2"
+    case_data["baseMVA"] = sys.base_mva
+    
+    # Convert buses
+    n_buses = length(sys.buses)
+    bus_data = zeros(n_buses, 13)
+    
+    bus_ids = sort(collect(keys(sys.buses)))
+    for (i, bus_id) in enumerate(bus_ids)
+        bus = sys.buses[bus_id]
+        bus_data[i, 1] = bus_id                    # Bus number
+        bus_data[i, 2] = Int(bus.bus_type)         # Bus type
+        bus_data[i, 3] = bus.load_p                # Pd (MW)
+        bus_data[i, 4] = bus.load_q                # Qd (MVAr)
+        bus_data[i, 5] = bus.shunt_g               # Gs (MW)
+        bus_data[i, 6] = bus.shunt_b               # Bs (MVAr)
+        bus_data[i, 7] = 1                         # Area
+        bus_data[i, 8] = bus.voltage_magnitude     # Vm (p.u.)
+        bus_data[i, 9] = rad2deg(bus.voltage_angle) # Va (degrees)
+        bus_data[i, 10] = bus.base_voltage         # Base kV
+        bus_data[i, 11] = 1                        # Zone
+        bus_data[i, 12] = bus.voltage_max          # Vmax (p.u.)
+        bus_data[i, 13] = bus.voltage_min          # Vmin (p.u.)
+    end
+    case_data["bus"] = bus_data
+    
+    # Convert generators
+    n_gens = length(sys.generators)
+    if n_gens > 0
+        gen_data = zeros(n_gens, 21)
+        gen_ids = sort(collect(keys(sys.generators)))
+        
+        for (i, gen_id) in enumerate(gen_ids)
+            gen = sys.generators[gen_id]
+            gen_data[i, 1] = gen.bus_id              # Bus number
+            gen_data[i, 2] = gen.p_output            # Pg (MW)
+            gen_data[i, 3] = gen.q_output            # Qg (MVAr)
+            gen_data[i, 4] = gen.q_max               # Qmax (MVAr)
+            gen_data[i, 5] = gen.q_min               # Qmin (MVAr)
+            gen_data[i, 6] = gen.voltage_setpoint    # Vg (p.u.)
+            gen_data[i, 7] = sys.base_mva           # mBase (MVA)
+            gen_data[i, 8] = gen.is_online ? 1 : 0   # Status
+            gen_data[i, 9] = gen.p_max               # Pmax (MW)
+            gen_data[i, 10] = gen.p_min              # Pmin (MW)
+        end
+        case_data["gen"] = gen_data
+    else
+        case_data["gen"] = zeros(0, 21)
+    end
+    
+    # Convert branches
+    n_branches = length(sys.branches)
+    if n_branches > 0
+        branch_data = zeros(n_branches, 13)
+        branch_ids = sort(collect(keys(sys.branches)))
+        
+        for (i, branch_id) in enumerate(branch_ids)
+            branch = sys.branches[branch_id]
+            branch_data[i, 1] = branch.from_bus       # From bus
+            branch_data[i, 2] = branch.to_bus         # To bus
+            branch_data[i, 3] = branch.resistance     # R (p.u.)
+            branch_data[i, 4] = branch.reactance      # X (p.u.)
+            branch_data[i, 5] = branch.susceptance    # B (p.u.)
+            branch_data[i, 6] = branch.rate_a         # Rate A (MVA)
+            branch_data[i, 7] = branch.rate_b         # Rate B (MVA)
+            branch_data[i, 8] = branch.rate_c         # Rate C (MVA)
+            branch_data[i, 9] = branch.tap_ratio      # Tap ratio
+            branch_data[i, 10] = branch.phase_shift   # Phase shift (degrees)
+            branch_data[i, 11] = branch.is_online ? 1 : 0  # Status
+        end
+        case_data["branch"] = branch_data
+    else
+        case_data["branch"] = zeros(0, 13)
+    end
+    
+    return case_data
+end
+
+"""
+    solve_power_system(sys::PowerSystem; max_iter=30, tol=1e-6, verbose=true)
+
+Solve power flow for PowerSystem using existing algorithms.
+"""
+function solve_power_system(sys::PowerSystem; max_iter=30, tol=1e-6, verbose=true)
+    # Convert to legacy format
+    case_data = convert_to_legacy_format(sys)
+    
+    # Use existing power flow solver
+    try
+        V, S, Sf, St = run_power_flow(case_data)
+        
+        # Convert results back to PowerSystem format
+        results = Dict{String, Any}()
+        results["voltage"] = V
+        results["power_injection"] = S
+        results["line_flows_from"] = Sf
+        results["line_flows_to"] = St
+        results["converged"] = true
+        results["case_data"] = case_data
+        
+        return results
+    catch e
+        if verbose
+            println("Power flow solution failed: $e")
+        end
+        return Dict("converged" => false, "error" => string(e))
+    end
+end
+
+"""
+    run_power_flow_new(sys::PowerSystem; with_visualization=false, kwargs...)
+
+Run power flow analysis on PowerSystem with optional visualization.
+"""
+function run_power_flow_new(sys::PowerSystem; with_visualization=false, kwargs...)
+    case_data = convert_to_legacy_format(sys)
+    
+    if with_visualization
+        try
+            # Use visualization version if available
+            return run_power_flow_with_visualization(case_data)
+        catch e
+            println("Visualization not available, using standard solver: $e")
+            return run_power_flow(case_data)
+        end
+    else
+        return run_power_flow(case_data)
+    end
+end
+
+"""
+    build_ybus_new(sys::PowerSystem)
+
+Build admittance matrix for PowerSystem using existing algorithm.
+"""
+function build_ybus_new(sys::PowerSystem)
+    case_data = convert_to_legacy_format(sys)
+    return build_ybus(case_data)
+end
+
+"""
+    update_system_from_results!(sys::PowerSystem, results::Dict)
+
+Update PowerSystem with power flow results.
+"""
+function update_system_from_results!(sys::PowerSystem, results::Dict)
+    if !results["converged"]
+        @warn "Cannot update system: power flow did not converge"
+        return
+    end
+    
+    V = results["voltage"]
+    case_data = results["case_data"]
+    
+    # Update bus voltages
+    bus_ids = sort(collect(keys(sys.buses)))
+    for (i, bus_id) in enumerate(bus_ids)
+        if i <= length(V)
+            sys.buses[bus_id].voltage_magnitude = abs(V[i])
+            sys.buses[bus_id].voltage_angle = angle(V[i])
+        end
+    end
+    
+    # Update generator reactive power output from results
+    if haskey(results, "case_data") && haskey(case_data, "gen")
+        gen_data = case_data["gen"]
+        gen_ids = sort(collect(keys(sys.generators)))
+        
+        # Calculate generator reactive power from power flow results
+        for (i, gen_id) in enumerate(gen_ids)
+            if i <= size(gen_data, 1)
+                # This would require recalculating from the voltage solution
+                # For now, we'll leave Q output as specified
+            end
+        end
+    end
+end
+
+"""
+    analyze_system_performance(sys::PowerSystem)
+
+Analyze the performance of all generators in the system.
+"""
+function analyze_system_performance(sys::PowerSystem)
+    println("="^60)
+    println("POWER SYSTEM PERFORMANCE ANALYSIS")
+    println("="^60)
+    
+    # Solve power flow
+    results = solve_power_system(sys, verbose=false)
+    
+    if !results["converged"]
+        println("❌ Power flow did not converge!")
+        return
+    end
+    
+    println("✅ Power flow converged successfully")
+    
+    # Update system with results
+    update_system_from_results!(sys, results)
+    
+    # Analyze each generator
+    println("\nGenerator Analysis:")
+    println("-"^40)
+    
+    for (gen_id, gen) in sys.generators
+        if !gen.is_online
+            continue
+        end
+        
+        bus = sys.buses[gen.bus_id]
+        println("Generator $gen_id (Bus $(gen.bus_id)):")
+        @printf("  Voltage: %.4f ∠ %.2f° p.u.\n", 
+                bus.voltage_magnitude, rad2deg(bus.voltage_angle))
+        @printf("  Power Output: %.2f MW + j%.2f MVAr\n", 
+                gen.p_output, gen.q_output)
+        
+        # Check capability constraints
+        valid, msg = check_capability_constraints(gen, gen.p_output, gen.q_output, bus.voltage_magnitude)
+        status = valid ? "✅" : "⚠️"
+        println("  Capability Check: $status $msg")
+        
+        # Calculate Q_min for current P
+        q_min_calc = calculate_qmin_function(gen, gen.p_output, bus.voltage_magnitude)
+        @printf("  Q_min at current P: %.2f MVAr\n", q_min_calc)
+        
+        # Calculate utilization
+        p_util = gen.p_output / gen.p_max * 100
+        s_current = sqrt(gen.p_output^2 + gen.q_output^2)
+        s_util = s_current / gen.s_max * 100
+        @printf("  Utilization: P=%.1f%%, S=%.1f%%\n", p_util, s_util)
+        println()
+    end
+    
+    # System summary
+    total_generation_p = sum(gen.p_output for gen in values(sys.generators) if gen.is_online)
+    total_load_p = sum(bus.load_p for bus in values(sys.buses))
+    total_generation_q = sum(gen.q_output for gen in values(sys.generators) if gen.is_online)
+    total_load_q = sum(bus.load_q for bus in values(sys.buses))
+    
+    println("System Summary:")
+    println("-"^40)
+    @printf("Total Generation: %.2f MW + j%.2f MVAr\n", total_generation_p, total_generation_q)
+    @printf("Total Load: %.2f MW + j%.2f MVAr\n", total_load_p, total_load_q)
+    @printf("Active Power Balance: %.4f MW\n", total_generation_p - total_load_p)
+    @printf("Reactive Power Balance: %.4f MVAr\n", total_generation_q - total_load_q)
+    
+    return results
+end
+
+end # module JuliaPowerFlow

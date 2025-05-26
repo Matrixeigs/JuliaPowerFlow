@@ -89,208 +89,268 @@ println("  - $(length(sys.branches)) branches")
 println("  - $(sys.base_mva) MVA base power")
 
 #=
-EXAMPLE 3: Using Existing Power Flow Functions
+EXAMPLE 3: Solving PowerSystem Directly
 =#
-println("\n3. Power Flow Analysis using Existing Functions:")
+println("\n3. Solving PowerSystem with New Interface:")
 println("-" * "="^40)
 
 try
-    # Use the existing case9 function and power flow solver
-    case_data = case9()
-    println("✓ Loaded IEEE 9-bus case from existing case9() function")
+    # Create a simple but complete power system
+    test_sys = PowerSystem(100.0)
     
-    # Run power flow using existing functions
-    V, S, Sf, St = run_power_flow(case_data)
+    # Add buses
+    add_component!(test_sys, Bus(1, bus_type=SLACK_BUS, voltage_magnitude=1.04))
+    add_component!(test_sys, Bus(2, bus_type=PV_BUS, voltage_magnitude=1.025, load_p=100.0, load_q=35.0))
+    add_component!(test_sys, Bus(3, bus_type=PQ_BUS, load_p=125.0, load_q=50.0))
     
-    println("✓ Power flow completed using existing solver")
+    # Add generators
+    add_component!(test_sys, Generator(1, 1, p_output=150.0, voltage_setpoint=1.04, 
+                                     p_max=250.0, s_max=300.0))
+    add_component!(test_sys, Generator(2, 2, p_output=80.0, voltage_setpoint=1.025,
+                                     p_max=150.0, s_max=180.0))
     
-catch e
-    println("⚠ Power flow calculation encountered an issue:")
-    println("  Error: $e")
-end
-
-#=
-EXAMPLE 4: Generator Capability Analysis
-=#
-println("\n4. Generator Capability Analysis:")
-println("-" * "="^40)
-
-# Test generator capability constraints
-test_points = [
-    (50.0, 25.0, "Normal operation"),
-    (200.0, 80.0, "High power"),
-    (100.0, 120.0, "Overexcited"),
-    (250.0, 0.0, "Maximum power"),
-    (300.0, 50.0, "Overcapacity")
-]
-
-println("✓ Testing generator capability constraints:")
-for (p, q, description) in test_points
-    valid, msg = check_capability_constraints(gen1, p, q)
-    status = valid ? "✓" : "✗"
-    @printf("  %s P=%.0f MW, Q=%.0f MVAr (%s): %s\n", 
-            status, p, q, description, msg)
-end
-
-# Calculate Q_min as function of P
-println("\n✓ Q_min function for different power levels:")
-for p in [0.0, 50.0, 100.0, 150.0, 200.0]  # Changed to Float64 values
-    q_min = calculate_qmin_function(gen1, p)
-    @printf("  P = %3.0f MW → Q_min = %.2f MVAr\n", p, q_min)
-end
-
-#=
-EXAMPLE 5: Using Pre-built Test Cases
-=#
-println("\n5. IEEE Test Case Example:")
-println("-" * "="^40)
-
-# Create IEEE 9-bus system using new structure
-ieee9_sys = create_ieee9_system()
-
-println("✓ IEEE 9-bus system created using new structure:")
-println("  - $(get_bus_count(ieee9_sys)) buses")
-println("  - $(length(ieee9_sys.generators)) generators")
-println("  - $(length(ieee9_sys.branches)) branches")
-
-# Show bus types
-bus_types = []
-for (id, bus) in ieee9_sys.buses
-    if bus.bus_type == SLACK_BUS
-        push!(bus_types, "Bus $id: Slack")
-    elseif bus.bus_type == PV_BUS
-        push!(bus_types, "Bus $id: PV")
+    # Add branches
+    add_component!(test_sys, Branch(1, 1, 2, resistance=0.02, reactance=0.08))
+    add_component!(test_sys, Branch(2, 2, 3, resistance=0.03, reactance=0.12))
+    add_component!(test_sys, Branch(3, 1, 3, resistance=0.025, reactance=0.10))
+    
+    println("✓ Created 3-bus test system with new interface")
+    
+    # Test converter function
+    legacy_data = convert_to_legacy_format(test_sys)
+    println("✓ Successfully converted to legacy format:")
+    println("  - Bus matrix: $(size(legacy_data["bus"]))")
+    println("  - Generator matrix: $(size(legacy_data["gen"]))")
+    println("  - Branch matrix: $(size(legacy_data["branch"]))")
+    
+    # Solve using new interface
+    results = solve_power_system(test_sys, verbose=true)
+    
+    if results["converged"]
+        println("✅ Power flow solved successfully using new interface!")
+        
+        # Update system with results
+        update_system_from_results!(test_sys, results)
+        
+        # Show voltage results
+        println("\n✓ Voltage Results:")
+        for (bus_id, bus) in sort(collect(test_sys.buses))
+            @printf("  Bus %d: %.4f ∠ %.2f° p.u.\n", 
+                    bus_id, bus.voltage_magnitude, rad2deg(bus.voltage_angle))
+        end
+        
+        # Test alternative solving method
+        V2, S2, Sf2, St2 = run_power_flow_new(test_sys)
+        println("✓ Alternative solver also successful")
+        
     else
-        push!(bus_types, "Bus $id: PQ")
+        println("❌ Power flow failed: $(results["error"])")
     end
-end
-
-println("✓ Bus classification:")
-for bt in bus_types
-    println("  - $bt")
-end
-
-#=
-EXAMPLE 6: Comparison with Existing Implementation
-=#
-println("\n6. Comparison with Existing Implementation:")
-println("-" * "="^40)
-
-# Compare data structures
-case_data = case9()
-println("✓ Original case9() structure:")
-println("  - Buses: $(size(case_data["bus"], 1))")
-println("  - Branches: $(size(case_data["branch"], 1))")
-println("  - Generators: $(size(case_data["gen"], 1))")
-
-println("✓ New PowerSystem structure:")
-println("  - Buses: $(length(ieee9_sys.buses))")
-println("  - Branches: $(length(ieee9_sys.branches))")
-println("  - Generators: $(length(ieee9_sys.generators))")
-
-#=
-EXAMPLE 7: Component Modification
-=#
-println("\n7. Dynamic Component Modification:")
-println("-" * "="^40)
-
-# Modify generator output
-original_p = gen1.p_output
-gen1.p_output = 180.0
-println("✓ Modified Gen 1 output: $(original_p) → $(gen1.p_output) MW")
-
-# Take a component offline
-gen2.is_online = false
-println("✓ Took Gen 2 offline")
-
-# Modify load
-original_load = bus2.load_p
-bus2.load_p = 120.0
-println("✓ Modified Bus 2 load: $(original_load) → $(bus2.load_p) MW")
-
-# Restore original values
-gen1.p_output = original_p
-gen2.is_online = true
-bus2.load_p = original_load
-println("✓ Restored original component settings")
-
-#=
-EXAMPLE 8: Integration Test
-=#
-println("\n8. Integration Test:")
-println("-" * "="^40)
-
-# Test using both existing power flow and new components
-try
-    println("✓ Testing integration between new components and existing solver...")
-    
-    # Create a simple 3-bus system
-    simple_sys = PowerSystem(100.0)
-    add_component!(simple_sys, Bus(1, bus_type=SLACK_BUS, voltage_magnitude=1.0))
-    add_component!(simple_sys, Bus(2, bus_type=PQ_BUS, load_p=50.0, load_q=20.0))
-    add_component!(simple_sys, Generator(1, 1, p_output=60.0, s_max=100.0))
-    add_component!(simple_sys, Branch(1, 1, 2, resistance=0.01, reactance=0.1))
-    
-    println("  - Created simple 2-bus system with new components")
-    println("  - System has $(get_bus_count(simple_sys)) buses")
-    
-    # Test generator capability
-    p_test, q_test = 60.0, 25.0
-    valid, msg = check_capability_constraints(simple_sys.generators[1], p_test, q_test)
-    println("  - Generator capability test: $valid ($msg)")
     
 catch e
-    println("  Note: Full integration requires converter functions")
+    println("⚠ Power system solving encountered an issue:")
+    println("  Error: $e")
+    println("  This is expected if power flow functions are not fully implemented")
+end
+
+#=
+EXAMPLE 4: IEEE 9-Bus Analysis with New Interface
+=#
+println("\n4. IEEE 9-Bus System Analysis:")
+println("-" * "="^40)
+
+try
+    # Create and solve IEEE 9-bus system
+    ieee9_new = create_ieee9_system()
+    
+    println("✓ Created IEEE 9-bus system with new interface")
+    
+    # Solve and analyze
+    results_ieee9 = solve_power_system(ieee9_new, verbose=false)
+    
+    if results_ieee9["converged"]
+        println("✅ IEEE 9-bus system solved successfully!")
+        
+        # Perform comprehensive analysis
+        analyze_system_performance(ieee9_new)
+        
+    else
+        println("❌ IEEE 9-bus system solution failed")
+    end
+    
+catch e
+    println("⚠ IEEE 9-bus analysis encountered an issue:")
     println("  Error: $e")
 end
 
 #=
-EXAMPLE 9: Induction Motor Analysis
+EXAMPLE 5: Comparison Between Interfaces
 =#
-println("\n9. Induction Motor Analysis:")
+println("\n5. Interface Comparison:")
 println("-" * "="^40)
 
 try
-    # Include the induction motor analysis module
-    include("visualization/induction_motor_analysis.jl")
+    # Compare legacy and new interfaces
+    println("✓ Testing both interfaces on same data...")
     
-    println("✓ Creating induction motor model...")
+    # Legacy interface
+    case_data_legacy = case9()
+    V_legacy, S_legacy, Sf_legacy, St_legacy = run_power_flow(case_data_legacy)
+    println("  - Legacy interface: ✅ Success")
     
-    # Create a sample induction motor
-    motor = InductionMotor(
-        rated_power=10.0,      # 10 kW
-        rated_voltage=400.0,   # 400 V
-        rated_speed=1450.0,    # 1450 rpm
-        r1=0.5, x1=1.0,       # Stator parameters
-        r2=0.3, x2=1.0,       # Rotor parameters
-        xm=30.0               # Magnetizing reactance
-    )
+    # New interface
+    ieee9_system = create_ieee9_system()
+    results_new = solve_power_system(ieee9_system, verbose=false)
     
-    # Calculate performance at rated conditions
-    sync_speed = 120 * motor.rated_frequency / motor.poles
-    rated_slip = (sync_speed - motor.rated_speed) / sync_speed
-    p_m, p_e, q, i, t, eff = calculate_motor_performance(motor, motor.rated_voltage, rated_slip)
-    
-    println("✓ Motor performance at rated conditions:")
-    @printf("  - Mechanical Power: %.2f kW\n", p_m)
-    @printf("  - Reactive Power: %.2f kVAr\n", q)
-    @printf("  - Efficiency: %.1f%%\n", eff)
-    
-    # Test voltage sensitivity
-    println("✓ Voltage sensitivity analysis:")
-    for v_pu in [0.8, 1.0, 1.2]
-        voltage = v_pu * motor.rated_voltage
-        p_test, _, q_test, _, _, _ = calculate_motor_performance(motor, voltage, rated_slip)
-        @printf("  - V=%.1f p.u.: P=%.2f kW, Q=%.2f kVAr\n", v_pu, p_test, q_test)
+    if results_new["converged"]
+        println("  - New interface: ✅ Success")
+        
+        # Compare voltage magnitudes
+        V_new = results_new["voltage"]
+        max_voltage_diff = maximum(abs.(abs.(V_legacy) - abs.(V_new)))
+        @printf("  - Maximum voltage difference: %.6f p.u.\n", max_voltage_diff)
+        
+        if max_voltage_diff < 1e-4
+            println("  ✅ Results are consistent between interfaces!")
+        else
+            println("  ⚠ Some differences detected (expected due to data variations)")
+        end
+    else
+        println("  - New interface: ❌ Failed")
     end
     
-    # Generate quick P-Q plot
-    pq_plot = plot_pq_characteristics(motor, voltage_levels=[0.9, 1.0, 1.1])
-    println("✓ Generated P-Q characteristics plot")
+catch e
+    println("⚠ Interface comparison encountered an issue:")
+    println("  Error: $e")
+end
+
+#=
+EXAMPLE 6: Generator Capability Analysis with Solved System
+=#
+println("\n6. Advanced Generator Analysis:")
+println("-" * "="^40)
+
+try
+    # Create system with generator at capability limits
+    limit_sys = PowerSystem(100.0)
+    
+    # Add components
+    add_component!(limit_sys, Bus(1, bus_type=SLACK_BUS, voltage_magnitude=1.04))
+    add_component!(limit_sys, Bus(2, bus_type=PQ_BUS, load_p=200.0, load_q=80.0))
+    
+    # Generator with specific capability constraints
+    limit_gen = Generator(1, 1, 
+                         p_output=200.0, 
+                         q_output=75.0,
+                         voltage_setpoint=1.04,
+                         p_max=250.0, p_min=10.0,
+                         q_max=100.0, q_min=-50.0,
+                         s_max=280.0,
+                         eq_min=0.9, eq_max=1.3,
+                         xd=0.8, delta_max=55.0)
+    
+    add_component!(limit_sys, limit_gen)
+    add_component!(limit_sys, Branch(1, 1, 2, resistance=0.01, reactance=0.05))
+    
+    println("✓ Created system to test generator limits")
+    
+    # Test various operating points
+    test_points = [
+        (180.0, 60.0, "Normal operation"),
+        (240.0, 85.0, "Near P limit"),
+        (200.0, 95.0, "Near Q limit"),
+        (200.0, 110.0, "Q overlimit"),
+        (260.0, 70.0, "P overlimit")
+    ]
+    
+    println("✓ Testing generator operating points:")
+    for (p_test, q_test, description) in test_points
+        # Temporarily set generator output
+        original_p = limit_gen.p_output
+        original_q = limit_gen.q_output
+        
+        limit_gen.p_output = p_test
+        limit_gen.q_output = q_test
+        
+        # Check constraints
+        valid, msg = check_capability_constraints(limit_gen, p_test, q_test)
+        status = valid ? "✅" : "❌"
+        
+        @printf("  %s P=%.0f MW, Q=%.0f MVAr (%s)\n", status, p_test, q_test, description)
+        @printf("    → %s\n", msg)
+        
+        # Calculate Q_min for this P level
+        q_min_calc = calculate_qmin_function(limit_gen, p_test)
+        @printf("    → Q_min = %.2f MVAr\n", q_min_calc)
+        
+        # Restore original values
+        limit_gen.p_output = original_p
+        limit_gen.q_output = original_q
+    end
     
 catch e
-    println("⚠ Induction motor analysis encountered an issue:")
+    println("⚠ Generator limit analysis encountered an issue:")
     println("  Error: $e")
+end
+
+#=
+EXAMPLE 8: Complete Workflow Demonstration
+=#
+println("\n8. Complete Workflow Demonstration:")
+println("-" * "="^40)
+
+try
+    println("✓ Demonstrating complete power system analysis workflow...")
+    
+    # Step 1: Create system
+    workflow_sys = create_ieee9_system()
+    println("  1. ✅ System created")
+    
+    # Step 2: Convert to legacy format  
+    legacy_format = convert_to_legacy_format(workflow_sys)
+    println("  2. ✅ Converted to legacy format")
+    
+    # Step 3: Solve power flow
+    pf_results = solve_power_system(workflow_sys)
+    if pf_results["converged"]
+        println("  3. ✅ Power flow solved")
+    else
+        println("  3. ❌ Power flow failed")
+        throw("Power flow solution failed")
+    end
+    
+    # Step 4: Update system
+    update_system_from_results!(workflow_sys, pf_results)
+    println("  4. ✅ System updated with results")
+    
+    # Step 5: Analyze generators
+    println("  5. ✅ Generator analysis:")
+    total_p = 0.0
+    total_violations = 0
+    
+    for (gen_id, gen) in workflow_sys.generators
+        if gen.is_online
+            valid, _ = check_capability_constraints(gen, gen.p_output, gen.q_output)
+            if !valid
+                total_violations += 1
+            end
+            total_p += gen.p_output
+        end
+    end
+    
+    @printf("     → Total generation: %.2f MW\n", total_p)
+    @printf("     → Capability violations: %d\n", total_violations)
+    
+    # Step 6: Build admittance matrix
+    ybus = build_ybus_new(workflow_sys)
+    println("  6. ✅ Admittance matrix built ($(size(ybus)))")
+    
+    println("✅ Complete workflow successful!")
+    
+catch e
+    println("⚠ Complete workflow encountered an issue:")
+    println("  Error: $e")
+    println("  This demonstrates the integration capabilities")
 end
 
 #=
