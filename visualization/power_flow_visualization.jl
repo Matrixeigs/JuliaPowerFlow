@@ -1,7 +1,7 @@
 using LinearAlgebra, SparseArrays, Printf
 using Plots, ColorSchemes
 using Statistics
-include("case9.jl")
+include("../data/case9.jl")
 
 """
     构建节点导纳矩阵
@@ -142,7 +142,7 @@ function calculate_power_injection(jpc)
     end
     
     # 添加发电机功率
-    for i in axes(gen, 1)
+    for i in 1:size(gen, 1)
         gen_bus = Int(gen[i, 1])
         pg = gen[i, 2] / baseMVA  # 有功发电（标幺值）
         qg = gen[i, 3] / baseMVA  # 无功发电（标幺值）
@@ -150,60 +150,6 @@ function calculate_power_injection(jpc)
     end
     
     return Sbus
-end
-
-"""
-    构造雅可比矩阵
-"""
-function create_jacobian(Ybus, V, pv, pq)
-    n = length(V)
-    pvpq = [pv; pq]
-    npv = length(pv)
-    npq = length(pq)
-    
-    # 初始化雅可比矩阵
-    J = zeros(length(pvpq) + length(pq), length(pvpq) + length(pq))
-    
-    # 构造对角线元素
-    diagV = sparse(1:n, 1:n, V)
-    diagIbus = sparse(1:n, 1:n, Ybus * V)
-    diagVnorm = sparse(1:n, 1:n, V ./ abs.(V))
-    
-    # 计算电流对电压的偏导数
-    dSbus_dVm = diagV * conj(Ybus * diagVnorm) + conj(diagIbus) * diagVnorm
-    dSbus_dVa = 1im * diagV * conj(diagIbus - Ybus * diagV)
-    
-    # 提取雅可比矩阵的四个子块
-    J11 = real(dSbus_dVa[pvpq, pvpq])    # dP/dVa
-    J12 = real(dSbus_dVm[pvpq, pq])      # dP/dVm
-    J21 = imag(dSbus_dVa[pq, pvpq])      # dQ/dVa
-    J22 = imag(dSbus_dVm[pq, pq])        # dQ/dVm
-    
-    # 组装完整的雅可比矩阵
-    if length(pq) > 0
-        J = [J11 J12; 
-             J21 J22]
-    else
-        J = J11  # 如果没有PQ节点，只有J11子块
-    end
-    
-    return J
-end
-
-"""
-    绘制雅可比矩阵热力图
-"""
-function plot_jacobian_heatmap(J, iteration)
-    p = heatmap(J, 
-                color=:viridis, 
-                aspect_ratio=:equal,
-                title="Heat Map of Jacobian Matrix ($iteration)",
-                xlabel="Variable Index",
-                ylabel="Power Injection Index",
-                colorbar_title="Jacobian Value",
-                clim=(-maximum(abs.(J)), maximum(abs.(J))),
-                size=(600, 500))
-    return p
 end
 
 """
@@ -362,6 +308,22 @@ function newton_raphson_power_flow_with_visualization(Ybus, Sbus, V0, pv, pq, re
 end
 
 """
+    绘制雅可比矩阵热力图
+"""
+function plot_jacobian_heatmap(J, iteration)
+    p = heatmap(J, 
+                color=:viridis, 
+                aspect_ratio=:equal,
+                title="Heat Map of Jacobian Matrix ($iteration)",
+                xlabel="Variable Index",
+                ylabel="Power Injection Index",
+                colorbar_title="Jacobian Value",
+                clim=(-maximum(abs.(J)), maximum(abs.(J))),
+                size=(600, 500))
+    return p
+end
+
+"""
     主函数：执行潮流计算（带可视化）
 """
 function run_power_flow_with_visualization(case_data)
@@ -444,150 +406,3 @@ function run_power_flow_with_visualization(case_data)
     
     return V, S, Sf, St
 end
-
-"""
-    计算线路功率流
-"""
-function calculate_line_flows(jpc, V)
-    branch = jpc["branch"]
-    baseMVA = jpc["baseMVA"]
-    nl = size(branch, 1)
-    
-    # 初始化线路功率流数组
-    Sf = zeros(Complex{Float64}, nl)  # 从起始节点流出的功率
-    St = zeros(Complex{Float64}, nl)  # 从终止节点流出的功率
-    
-    for i in 1:nl
-        # 获取支路起始和终止节点
-        from_bus = Int(branch[i, 1])
-        to_bus = Int(branch[i, 2])
-        
-        # 获取支路参数
-        r = branch[i, 3]
-        x = branch[i, 4]
-        b = branch[i, 5]
-        
-        # 计算支路导纳
-        y = 1.0 / complex(r, x)
-        
-        # 计算分路导纳
-        b_sh = complex(0, b)
-        
-        # 获取变压器变比
-        tap = branch[i, 10]
-        if tap == 0
-            tap = 1.0
-        end
-        
-        # 获取相移角度（弧度）
-        shift = branch[i, 11] * (π/180)
-        
-        # 计算变压器复变比
-        tap_complex = tap * exp(im * shift)
-        
-        # 计算线路功率流
-        if tap == 1.0 && shift == 0  # 普通线路
-            Sf[i] = V[from_bus] * conj(y * (V[from_bus] - V[to_bus]) + b_sh/2 * V[from_bus])
-            St[i] = V[to_bus] * conj(y * (V[to_bus] - V[from_bus]) + b_sh/2 * V[to_bus])
-        else  # 变压器
-            Sf[i] = V[from_bus] * conj(y/conj(tap_complex) * (V[from_bus]/tap_complex - V[to_bus]))
-            St[i] = V[to_bus] * conj(y * (V[to_bus] - V[from_bus]/tap_complex))
-        end
-    end
-    
-    # 转换为实际功率（MVA）
-    Sf = Sf * baseMVA
-    St = St * baseMVA
-    
-    return Sf, St
-end
-
-"""
-    绘制电力系统拓扑图
-"""
-function plot_power_system_topology(jpc, V)
-    bus = jpc["bus"]
-    branch = jpc["branch"]
-    gen = jpc["gen"]
-    
-    # 创建节点坐标（简单圆形布局）
-    nb = size(bus, 1)
-    theta = LinRange(0, 2π * (1 - 1/nb), nb)
-    radius = 5
-    bus_x = radius .* cos.(theta)
-    bus_y = radius .* sin.(theta)
-    
-    # 创建拓扑图
-    p = plot(size=(800, 800), aspect_ratio=:equal, legend=:topright)
-    
-    # 绘制支路（线路）
-    for i in axes(branch, 1)
-        from_bus = Int(branch[i, 1])
-        to_bus = Int(branch[i, 2])
-        plot!([bus_x[from_bus], bus_x[to_bus]], [bus_y[from_bus], bus_y[to_bus]], 
-              linewidth=2, color=:black, label="")
-    end
-    
-    # 绘制节点
-    for i in 1:nb
-        # 根据节点类型确定颜色
-        bus_type = Int(bus[i, 2])
-        if bus_type == 3  # 参考节点
-            node_color = :red
-            node_label = "Ref: $i"
-        elseif bus_type == 2  # PV节点
-            node_color = :green
-            node_label = "PV: $i"
-        else  # PQ节点
-            node_color = :blue
-            node_label = "PQ: $i"
-        end
-        
-        # 绘制节点
-        scatter!([bus_x[i]], [bus_y[i]], 
-                 markersize=10, 
-                 color=node_color, 
-                 label=i == 1 ? node_label : "")
-        
-        # 添加节点标签
-        annotate!(bus_x[i], bus_y[i] + 0.3, text("$i", 10))
-        
-        # 添加电压信息
-        vm = abs(V[i])
-        va = rad2deg(angle(V[i]))
-        annotate!(bus_x[i], bus_y[i] - 0.5, text("$(round(vm, digits=3))∠$(round(va, digits=1))°", 8))
-    end
-    
-    # 添加图例
-    plot!(label="Slack bus", color=:red, marker=:circle, markersize=5, linewidth=0)
-    plot!(label="PV bus", color=:green, marker=:circle, markersize=5, linewidth=0)
-    plot!(label="PQ bus", color=:blue, marker=:circle, markersize=5, linewidth=0)
-    
-    title!("IEEE 9 Bus System Topology")
-    
-    # 保存拓扑图
-    savefig(p, "power_system_topology.png")
-    
-    return p
-end
-
-"""
-    主程序
-"""
-function main()
-    # 加载case9.jl
-    include("case9.jl")
-    
-    # 获取IEEE 9节点系统数据
-    case_data = case9()
-    
-    # 执行潮流计算（带可视化）
-    V, S, Sf, St = run_power_flow_with_visualization(case_data)
-    
-    # 绘制电力系统拓扑图
-    topology_plot = plot_power_system_topology(case_data, V)
-    display(topology_plot)
-end
-
-# 执行主程序
-main()

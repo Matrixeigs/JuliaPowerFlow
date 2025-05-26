@@ -10,11 +10,13 @@ export THERMAL, HYDRO, WIND, SOLAR, NUCLEAR
 export build_ybus, newton_raphson_power_flow
 export add_component!, get_bus_count, identify_bus_types
 export check_capability_constraints, calculate_qmin_function
-export create_ieee9_system, case9
+export create_ieee9_system, case9, run_power_flow
+export run_power_flow_with_visualization
 
-# Include existing functionality from the standalone files
-include("../case9.jl")
-include("../power_flow.jl")
+# Include core functionality from organized directories
+include("../data/case9.jl")
+include("../algorithms/power_flow.jl")
+include("../visualization/power_flow_visualization.jl")
 
 # Define the component types directly in this module for now
 @enum BusType begin
