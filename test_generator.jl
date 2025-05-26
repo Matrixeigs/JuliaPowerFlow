@@ -1,4 +1,5 @@
 include("static_generation.jl")
+include("test_generator_D_shapre.jl")  # Include the D-shape functions
 
 # Plot individual models
 plot_simple_box_model(p_min=-1.0, p_max=0.9, q_min=-0.8, q_max=0.8)
@@ -37,7 +38,6 @@ println("Testing full constraints with Q_min function...")
 full_with_qmin_func = plot_full_constraints(
     p_min=0.0, p_max=0.9, 
     q_min=-0.5, q_max=0.8, 
-    s_max=1.0, 
     delta_max=50,
     eq_min=1.1, eq_max=1.4, 
     ut=1.0, xd=0.8,
