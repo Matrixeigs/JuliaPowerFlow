@@ -248,11 +248,11 @@ function plot_with_delta_limits(; p_min=-1.0, p_max=1.0, s_max=1.0, delta_max=60
     
     # Plot delta constraints (now smooth curves)
     if !isempty(q_max_curve)
-        plot!(plt, q_max_curve, p_max_curve, linecolor=:red, linewidth=2, label="δ = $delta_max°")
+        plot!(plt, q_max_curve, p_max_curve, linecolor=:red, linewidth=2, label="δ = $delta_max °")
     end
     
     if !isempty(q_min_curve)
-        plot!(plt, q_min_curve, p_min_curve, linecolor=:red, linewidth=2, label="δ = -$delta_max°")
+        plot!(plt, q_min_curve, p_min_curve, linecolor=:red, linewidth=2, label="δ = -$delta_max °")
     end
     
     # Add legend

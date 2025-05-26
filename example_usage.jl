@@ -245,6 +245,55 @@ catch e
 end
 
 #=
+EXAMPLE 9: Induction Motor Analysis
+=#
+println("\n9. Induction Motor Analysis:")
+println("-" * "="^40)
+
+try
+    # Include the induction motor analysis module
+    include("visualization/induction_motor_analysis.jl")
+    
+    println("✓ Creating induction motor model...")
+    
+    # Create a sample induction motor
+    motor = InductionMotor(
+        rated_power=10.0,      # 10 kW
+        rated_voltage=400.0,   # 400 V
+        rated_speed=1450.0,    # 1450 rpm
+        r1=0.5, x1=1.0,       # Stator parameters
+        r2=0.3, x2=1.0,       # Rotor parameters
+        xm=30.0               # Magnetizing reactance
+    )
+    
+    # Calculate performance at rated conditions
+    sync_speed = 120 * motor.rated_frequency / motor.poles
+    rated_slip = (sync_speed - motor.rated_speed) / sync_speed
+    p_m, p_e, q, i, t, eff = calculate_motor_performance(motor, motor.rated_voltage, rated_slip)
+    
+    println("✓ Motor performance at rated conditions:")
+    @printf("  - Mechanical Power: %.2f kW\n", p_m)
+    @printf("  - Reactive Power: %.2f kVAr\n", q)
+    @printf("  - Efficiency: %.1f%%\n", eff)
+    
+    # Test voltage sensitivity
+    println("✓ Voltage sensitivity analysis:")
+    for v_pu in [0.8, 1.0, 1.2]
+        voltage = v_pu * motor.rated_voltage
+        p_test, _, q_test, _, _, _ = calculate_motor_performance(motor, voltage, rated_slip)
+        @printf("  - V=%.1f p.u.: P=%.2f kW, Q=%.2f kVAr\n", v_pu, p_test, q_test)
+    end
+    
+    # Generate quick P-Q plot
+    pq_plot = plot_pq_characteristics(motor, voltage_levels=[0.9, 1.0, 1.1])
+    println("✓ Generated P-Q characteristics plot")
+    
+catch e
+    println("⚠ Induction motor analysis encountered an issue:")
+    println("  Error: $e")
+end
+
+#=
 SUMMARY
 =#
 println("\n" * "="^60)
