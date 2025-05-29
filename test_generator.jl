@@ -1,5 +1,6 @@
 include("static_generation.jl")
-include("test_generator_D_shapre.jl")  # Include the D-shape functions
+include("test_generator_D_shape.jl")  # Include the D-shape functions
+include("reactive_power_examples.jl")  # Include reactive power examples
 
 # Plot individual models
 plot_simple_box_model(p_min=-1.0, p_max=0.9, q_min=-0.8, q_max=0.8)
@@ -58,4 +59,3 @@ full_with_constant_qmin = plot_full_constraints(
     title="Full Constraints with Constant Q_min"
 )
 display(full_with_constant_qmin)
-
