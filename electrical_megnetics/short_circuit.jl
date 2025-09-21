@@ -70,25 +70,24 @@ function simulate_emt_fault_current(network::NetworkData, fault::FaultParameters
     
     # Initialize state vector
     n_ibders = length(network.ibder_locations)
-    # Restructure state vector to avoid complex numbers in ODE
-    # Grid: angle, frequency, voltage_ref (3)
-    # IBDER: i_d, i_q, v_d, v_q, integrator_d, integrator_q (6 each)
     n_states = 3 + 6*n_ibders
     
     # Create state indices structure
     state_idx = create_state_indices(n_ibders)
     
-    # Initial conditions
+    # Initial conditions with proper steady-state values
     u0 = zeros(n_states)
     u0[state_idx.grid_angle] = 0.0
     u0[state_idx.grid_frequency] = 2π * network.grid_params.frequency
     u0[state_idx.grid_voltage_ref] = network.grid_params.voltage_magnitude
     
-    # Initialize IBDER states
+    # Initialize IBDER states with proper steady-state values
     for i in 1:n_ibders
-        u0[state_idx.ibder_current_d[i]] = 0.0
-        u0[state_idx.ibder_current_q[i]] = 0.0
-        u0[state_idx.ibder_voltage_d[i]] = network.grid_params.voltage_magnitude
+        # Initial current based on rated power (positive for generation)
+        i_rated = network.ibder_params[i].rated_power / (sqrt(3) * network.ibder_params[i].rated_voltage)
+        u0[state_idx.ibder_current_d[i]] = i_rated  # Positive d-axis current for real power
+        u0[state_idx.ibder_current_q[i]] = 0.0      # Zero q-axis current initially
+        u0[state_idx.ibder_voltage_d[i]] = network.ibder_params[i].rated_voltage
         u0[state_idx.ibder_voltage_q[i]] = 0.0
         u0[state_idx.ibder_integrator_d[i]] = 0.0
         u0[state_idx.ibder_integrator_q[i]] = 0.0
@@ -164,7 +163,7 @@ function create_state_indices(n_ibders::Int)
 end
 
 function grid_ode!(du, u, grid_params::ExternalGridParameters, state_idx::StateIndices, fault_active::Bool)
-    """External grid ODE model"""
+    """External grid ODE model with proper power feedback"""
     
     # Extract grid states
     θ = u[state_idx.grid_angle]
@@ -172,45 +171,51 @@ function grid_ode!(du, u, grid_params::ExternalGridParameters, state_idx::StateI
     V_ref = u[state_idx.grid_voltage_ref]
     
     # Grid dynamics
-    # dθ/dt = ω - ω₀
     du[state_idx.grid_angle] = ω - 2π * grid_params.frequency
     
-    # Frequency dynamics (simplified swing equation)
-    # dω/dt = (P_mech - P_elec - D*Δω) / (2H)
+    # Frequency dynamics with power feedback
     ω_base = 2π * grid_params.frequency
     Δω = ω - ω_base
     
-    # Simplified mechanical power and electrical power calculation
-    P_mech = 0.0  # Assumed constant for this simulation
-    P_elec = 0.0  # Would be calculated from network solution
+    # Simplified power calculation (would be more accurate with network solution)
+    P_mech = 1.0  # Base mechanical power to maintain frequency
     
-    # Frequency deviation response
-    du[state_idx.grid_frequency] = -(grid_params.damping * Δω) / grid_params.inertia
+    # During fault, electrical power drops, causing frequency rise
+    # After fault, system should return to nominal frequency
+    if fault_active
+        P_elec = 0.5 * P_mech  # Reduced electrical power during fault
+    else
+        P_elec = P_mech  # Normal electrical power
+    end
+    
+    # Governor/frequency response
+    P_ref_adjustment = -0.05 * Δω  # Droop response
+    P_net = P_mech + P_ref_adjustment - P_elec
+    
+    # Swing equation: dω/dt = (P_net - D*Δω) / (2H)
+    du[state_idx.grid_frequency] = (P_net - grid_params.damping * Δω) / (2 * grid_params.inertia)
     
     # Voltage reference dynamics (AVR response)
-    # Simple first-order AVR model
-    V_terminal = abs(grid_params.voltage_magnitude)  # Would be from network solution
     V_set = grid_params.voltage_magnitude
     
     if fault_active
         # During fault, voltage reference tries to maintain voltage
-        du[state_idx.grid_voltage_ref] = (V_set * 1.05 - V_ref) / grid_params.time_constant
+        du[state_idx.grid_voltage_ref] = (V_set * 1.1 - V_ref) / grid_params.time_constant
     else
+        # After fault, return to nominal voltage
         du[state_idx.grid_voltage_ref] = (V_set - V_ref) / grid_params.time_constant
     end
 end
 
 function solve_network_algebraic_autodiff!(du, u, network::NetworkData, Y_bus::Matrix{ComplexF64}, 
                                          state_idx::StateIndices, fault::FaultParameters, fault_active::Bool)
-    """Solve network algebraic equations compatible with automatic differentiation"""
+    """Solve network algebraic equations with proper voltage calculation"""
     
-    # Modify admittance matrix for fault (create real equivalent)
+    # Modify admittance matrix for fault
     Y_fault_real = zeros(2*network.bus_count, 2*network.bus_count)
     Y_fault = fault_active ? apply_fault_admittance(Y_bus, fault) : Y_bus
     
     # Convert complex admittance matrix to real equivalent form
-    # [Re(Y) -Im(Y)]
-    # [Im(Y)  Re(Y)]
     for i in 1:network.bus_count
         for j in 1:network.bus_count
             Y_fault_real[i, j] = real(Y_fault[i, j])
@@ -223,57 +228,67 @@ function solve_network_algebraic_autodiff!(du, u, network::NetworkData, Y_bus::M
     # Current injections in real form
     I_injection_real = zeros(2*network.bus_count)
     
-    # Grid current injection
+    # Grid current injection - improved grid model
     θ_grid = u[state_idx.grid_angle]
     V_grid = u[state_idx.grid_voltage_ref]
     
-    # Grid contribution (simplified for autodiff compatibility)
     grid_bus = network.grid_bus
     if grid_bus <= network.bus_count
-        # Simplified grid model - voltage source behind impedance
+        # Grid voltage phasor
+        V_grid_real = V_grid * cos(θ_grid)
+        V_grid_imag = V_grid * sin(θ_grid)
+        
+        # Grid behind impedance model
         Z_grid = network.grid_params.impedance
-        I_grid_real = V_grid * cos(θ_grid) / abs(Z_grid)
-        I_grid_imag = V_grid * sin(θ_grid) / abs(Z_grid)
+        Y_grid = 1.0 / Z_grid
+        
+        # Add grid admittance to the matrix
+        Y_fault_real[grid_bus, grid_bus] += real(Y_grid)
+        Y_fault_real[grid_bus, grid_bus + network.bus_count] += -imag(Y_grid)
+        Y_fault_real[grid_bus + network.bus_count, grid_bus] += imag(Y_grid)
+        Y_fault_real[grid_bus + network.bus_count, grid_bus + network.bus_count] += real(Y_grid)
+        
+        # Grid voltage source injection
+        I_grid_real = real(Y_grid) * V_grid_real - imag(Y_grid) * V_grid_imag
+        I_grid_imag = imag(Y_grid) * V_grid_real + real(Y_grid) * V_grid_imag
         
         I_injection_real[grid_bus] += I_grid_real
         I_injection_real[grid_bus + network.bus_count] += I_grid_imag
     end
     
-    # IBDER current injections
+    # IBDER current injections - corrected signs
     for (i, bus_idx) in enumerate(network.ibder_locations)
         if bus_idx <= network.bus_count
             i_d = u[state_idx.ibder_current_d[i]]
             i_q = u[state_idx.ibder_current_q[i]]
             
-            # dq to real/imaginary conversion (simplified)
+            # Correct dq to real/imaginary conversion for current injection
+            # Positive i_d should inject real current, positive i_q should inject reactive current
             I_injection_real[bus_idx] += i_d
-            I_injection_real[bus_idx + network.bus_count] += -i_q
+            I_injection_real[bus_idx + network.bus_count] += i_q  # Corrected sign
         end
     end
     
-    # Solve for bus voltages using pseudo-inverse for robustness
+    # Solve for bus voltages
     try
-        # Use regularized solution to avoid singularity
         reg_factor = 1e-8
-        Y_reg = Y_fault_real + reg_factor * I
+        Y_reg = Y_fault_real + reg_factor * I(2*network.bus_count)
         V_solution = Y_reg \ I_injection_real
         
         # Update IBDER terminal voltage states
         for (i, bus_idx) in enumerate(network.ibder_locations)
             if bus_idx <= network.bus_count
-                # Extract real and imaginary parts
                 v_real = V_solution[bus_idx]
                 v_imag = V_solution[bus_idx + network.bus_count]
                 
-                # Convert to dq (simplified transformation)
-                du[state_idx.ibder_voltage_d[i]] = (v_real - u[state_idx.ibder_voltage_d[i]]) / 0.001
-                du[state_idx.ibder_voltage_q[i]] = (-v_imag - u[state_idx.ibder_voltage_q[i]]) / 0.001
+                # Fast voltage tracking
+                time_constant = 0.001
+                du[state_idx.ibder_voltage_d[i]] = (v_real - u[state_idx.ibder_voltage_d[i]]) / time_constant
+                du[state_idx.ibder_voltage_q[i]] = (v_imag - u[state_idx.ibder_voltage_q[i]]) / time_constant
             end
         end
     catch e
-        # Handle numerical issues gracefully
-        println("Warning: Network solution failed at time step, using previous values")
-        # Keep voltage states unchanged
+        println("Warning: Network solution failed, using previous values")
         for (i, bus_idx) in enumerate(network.ibder_locations)
             du[state_idx.ibder_voltage_d[i]] = 0.0
             du[state_idx.ibder_voltage_q[i]] = 0.0
@@ -283,7 +298,7 @@ end
 
 function ibder_ode!(du, u, ibder_param::IBDERParameters, state_idx::StateIndices, 
                    ibder_idx::Int, t::Float64, fault_active::Bool)
-    """IBDER ODE/DAE model with detailed current control - autodiff compatible"""
+    """IBDER ODE/DAE model with corrected current signs and references"""
     
     # Extract IBDER states
     i_d = u[state_idx.ibder_current_d[ibder_idx]]
@@ -309,8 +324,9 @@ function ibder_ode!(du, u, ibder_param::IBDERParameters, state_idx::StateIndices
             # Voltage magnitude for voltage support logic
             v_mag = sqrt(v_d^2 + v_q^2)
             if v_mag > 0.1 * ibder_param.rated_voltage
-                # Prioritize reactive current for voltage support
-                i_d_ref = min(0.2 * i_max, ibder_param.rated_power / (sqrt(3) * ibder_param.rated_voltage))
+                # Reduce active current, increase reactive current for voltage support
+                i_d_ref = min(0.5 * i_max, ibder_param.rated_power / (2 * sqrt(3) * ibder_param.rated_voltage))
+                # Positive q-axis current for reactive power injection (voltage support)
                 i_q_available = sqrt(max(0.0, i_max^2 - i_d_ref^2))
                 i_q_ref = min(i_q_available, 0.8 * i_max)
             else
@@ -318,12 +334,12 @@ function ibder_ode!(du, u, ibder_param::IBDERParameters, state_idx::StateIndices
                 i_q_ref = 0.0
             end
         else
-            # Current limiting only
+            # Current limiting only - maintain positive active current
             i_d_ref = min(i_max, ibder_param.rated_power / (sqrt(3) * ibder_param.rated_voltage))
             i_q_ref = 0.0
         end
     else
-        # Normal operation
+        # Normal operation - positive d-axis current for real power generation
         i_d_ref = ibder_param.rated_power / (sqrt(3) * ibder_param.rated_voltage)
         i_q_ref = 0.0
     end
@@ -332,9 +348,9 @@ function ibder_ode!(du, u, ibder_param::IBDERParameters, state_idx::StateIndices
     e_d = i_d_ref - i_d
     e_q = i_q_ref - i_q
     
-    # PI controller for current control
-    v_d_ref = kp * e_d + ki * xi_d - ω * L * i_q + v_d
-    v_q_ref = kp * e_q + ki * xi_q + ω * L * i_d + v_q
+    # PI controller for current control with proper decoupling
+    v_d_ref = kp * e_d + ki * xi_d - ω * L * i_q
+    v_q_ref = kp * e_q + ki * xi_q + ω * L * i_d
     
     # PWM modulation with DC voltage limit
     v_dc_half = V_dc / 2
@@ -345,8 +361,8 @@ function ibder_ode!(du, u, ibder_param::IBDERParameters, state_idx::StateIndices
     v_inv_d = m_d * v_dc_half
     v_inv_q = m_q * v_dc_half
     
-    # Current dynamics (inductor equation)
-    R = 0.01  # Small resistance representing losses
+    # Current dynamics (inductor equation) - corrected signs
+    R = 0.01
     du[state_idx.ibder_current_d[ibder_idx]] = (v_inv_d - v_d - R*i_d + ω*L*i_q) / L
     du[state_idx.ibder_current_q[ibder_idx]] = (v_inv_q - v_q - R*i_q - ω*L*i_d) / L
     
@@ -355,55 +371,8 @@ function ibder_ode!(du, u, ibder_param::IBDERParameters, state_idx::StateIndices
     du[state_idx.ibder_integrator_q[ibder_idx]] = e_q
 end
 
-function solve_network_algebraic!(du, u, network::NetworkData, Y_bus::Matrix{ComplexF64}, 
-                                state_idx::StateIndices, fault::FaultParameters, fault_active::Bool)
-    """Solve network algebraic equations and update voltage states"""
-    
-    # Modify admittance matrix for fault
-    Y_fault = fault_active ? apply_fault_admittance(Y_bus, fault) : Y_bus
-    
-    # Current injections from grid and IBDERs
-    I_injection = zeros(ComplexF64, network.bus_count)
-    
-    # Grid current injection
-    θ_grid = u[state_idx.grid_angle]
-    V_grid = u[state_idx.grid_voltage_ref]
-    grid_voltage = V_grid * exp(1im * θ_grid)
-    
-    # Grid current through grid impedance
-    if network.bus_count > 0
-        grid_bus_voltage = 0.0 + 0.0im  # Would be solved from network
-        I_grid = (grid_voltage - grid_bus_voltage) / network.grid_params.impedance
-        I_injection[network.grid_bus] = I_grid
-    end
-    
-    # IBDER current injections
-    for (i, bus_idx) in enumerate(network.ibder_locations)
-        i_d = u[state_idx.ibder_current_d[i]]
-        i_q = u[state_idx.ibder_current_q[i]]
-        # Convert dq to phasor (simplified transformation)
-        I_injection[bus_idx] = (i_d - 1im * i_q)
-    end
-    
-    # Solve for bus voltages
-    try
-        bus_voltages = Y_fault \ I_injection
-        
-        # Update IBDER terminal voltage states
-        for (i, bus_idx) in enumerate(network.ibder_locations)
-            v_phasor = bus_voltages[bus_idx]
-            # Convert to dq (simplified)
-            du[state_idx.ibder_voltage_d[i]] = real(v_phasor)
-            du[state_idx.ibder_voltage_q[i]] = -imag(v_phasor)
-        end
-    catch
-        # Handle singular matrix during fault
-        println("Warning: Singular matrix encountered during network solution")
-    end
-end
-
 function extract_emt_results(sol, network::NetworkData, fault::FaultParameters, state_idx::StateIndices)
-    """Extract results from ODE solution"""
+    """Extract results from ODE solution with proper transformations"""
     
     t = sol.t
     n_steps = length(t)
@@ -419,20 +388,30 @@ function extract_emt_results(sol, network::NetworkData, fault::FaultParameters, 
         u = sol.u[i]
         
         # Extract grid states
-        grid_frequency[i] = u[state_idx.grid_frequency] / (2π)  # Convert to Hz
+        grid_frequency[i] = u[state_idx.grid_frequency] / (2π)
         grid_voltage[i] = u[state_idx.grid_voltage_ref]
         
-        # Extract IBDER currents
+        # Extract IBDER currents with correct transformation
         for j in 1:n_ibders
             i_d = u[state_idx.ibder_current_d[j]]
             i_q = u[state_idx.ibder_current_q[j]]
-            ibder_currents[j, i] = i_d - 1im * i_q
+            # Correct dq to phasor transformation
+            ibder_currents[j, i] = i_d + 1im * i_q  # Corrected sign
             
-            # Reconstruct bus voltages (simplified)
+            # Reconstruct bus voltages
             bus_idx = network.ibder_locations[j]
-            v_d = u[state_idx.ibder_voltage_d[j]]
-            v_q = u[state_idx.ibder_voltage_q[j]]
-            bus_voltages[bus_idx, i] = v_d - 1im * v_q
+            if bus_idx <= network.bus_count
+                v_d = u[state_idx.ibder_voltage_d[j]]
+                v_q = u[state_idx.ibder_voltage_q[j]]
+                bus_voltages[bus_idx, i] = v_d + 1im * v_q  # Corrected transformation
+            end
+        end
+        
+        # Add grid bus voltage
+        if network.grid_bus <= network.bus_count
+            θ_grid = u[state_idx.grid_angle]
+            V_grid = u[state_idx.grid_voltage_ref]
+            bus_voltages[network.grid_bus, i] = V_grid * exp(1im * θ_grid)
         end
     end
     
