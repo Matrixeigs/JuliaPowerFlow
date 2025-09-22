@@ -174,7 +174,7 @@ function simulate_generator(;
     
     # Define and solve the problem
     prob = ODEProblem(generator_with_disturbance!, x0, tspan, p)
-    sol = solve(prob, Tsit5(), reltol=1e-8, abstol=1e-10)
+    sol = solve(prob, Rodas4(), reltol=1e-6, abstol=1e-8, dtmax=0.001)
     
     return sol, params
 end
