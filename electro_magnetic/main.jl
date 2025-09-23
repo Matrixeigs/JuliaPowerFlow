@@ -2,7 +2,7 @@
 # AC Distribution System with Inverter-Based Resources (IBRs)
 
 using DifferentialEquations, LinearAlgebra, Plots, Random, Statistics
-using SparseArrays, NLsolve, FFTW
+using SparseArrays, NLsolve, FFTW, Polynomials
 
 # Include all component files
 include("parameters.jl")
@@ -41,7 +41,8 @@ function main()
     prob = ODEProblem(system_dynamics!, x0, tspan, components)
     
     # Use Rodas5 solver for stiff systems (electromagnetic transients)
-    sol = solve(prob, Rodas5(), dt=DT, adaptive=true, reltol=1e-6, abstol=1e-8)
+    # Disable autodiff to avoid issues with non-compatible functions
+    sol = solve(prob, Rodas5(autodiff=false), dt=DT, adaptive=true, reltol=1e-6, abstol=1e-8)
     
     println("Simulation completed successfully!")
     

@@ -1,9 +1,4 @@
-# analysis.jl - Results Analysis and Post-Processing Functions
-
-# ============================================================================
-# ANALYSIS FUNCTIONS
-# ============================================================================
-
+using Polynomials
 """
 Comprehensive analysis of simulation results
 
